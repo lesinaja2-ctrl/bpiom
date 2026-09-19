@@ -1,0 +1,10 @@
+{
+  "name": "BPIOM",
+  "description": "Portal Resmi Badan Pengolahan Informasi Obat dan Makanan: Cek Izin Edar Resmi, Verifikasi Barcode Digital, Hasil Pengujian Laboratorium, Direktori Produsen, dan Pelaporan Pengaduan.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
