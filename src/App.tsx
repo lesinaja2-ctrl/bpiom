@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { StorageService } from './services/storageService';
+import { SupabaseService } from './services/supabaseService';
 import {
   Product,
   Category,
@@ -30,9 +31,6 @@ import { AuthModal } from './components/AuthModal';
 import { AdminPanel } from './components/AdminPanel';
 import { StandaloneProductPage } from './components/StandaloneProductPage';
 import { CustomPageView } from './components/CustomPageView';
-import { ErrorBoundary } from './components/ErrorBoundary';
-import { SupabaseService } from './services/supabaseService';
-import { SUPABASE_SQL_SCHEMA } from './services/supabaseSchema';
 import {
   ShieldAlert,
   PhoneCall,
@@ -45,72 +43,27 @@ import {
   Rocket,
   CheckCircle2,
   Sliders,
-  AlertTriangle,
-  Copy,
-  Check,
-  RefreshCw,
 } from 'lucide-react';
 
 export default function App() {
-  // Core Entities State (Initialized synchronously to prevent initial render flashes or undefined state)
-  const [products, setProducts] = useState<Product[]>(() => StorageService.getProducts());
-  const [categories, setCategories] = useState<Category[]>(() => StorageService.getCategories());
-  const [producers, setProducers] = useState<Producer[]>(() => StorageService.getProducers());
-  const [labResults, setLabResults] = useState<LabResult[]>(() => StorageService.getLabResults());
-  const [recalls, setRecalls] = useState<RecallAlert[]>(() => StorageService.getRecalls());
-  const [reports, setReports] = useState<Report[]>(() => StorageService.getReports());
-  const [users, setUsers] = useState<User[]>(() => StorageService.getUsers());
-  const [config, setConfig] = useState<AppConfig>(() => StorageService.getConfig());
-  const [currentUser, setCurrentUser] = useState<User | null>(() => StorageService.getCurrentUser());
-  const [settings, setSettings] = useState<WebsiteSettings>(() => StorageService.getSettings());
-  const [customPages, setCustomPages] = useState<CustomPage[]>(() => StorageService.getCustomPages());
+  // Core Entities State
+  const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [producers, setProducers] = useState<Producer[]>([]);
+  const [labResults, setLabResults] = useState<LabResult[]>([]);
+  const [recalls, setRecalls] = useState<RecallAlert[]>([]);
+  const [reports, setReports] = useState<Report[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [config, setConfig] = useState<AppConfig>(StorageService.getConfig());
+  const [currentUser, setCurrentUser] = useState<User | null>(StorageService.getCurrentUser());
+  const [settings, setSettings] = useState<WebsiteSettings>(StorageService.getSettings());
+  const [customPages, setCustomPages] = useState<CustomPage[]>(StorageService.getCustomPages());
 
-  // Navigation & Routing State (Synchronously resolved from URL)
-  const [activeTab, setActiveTab] = useState<string>(() => {
-    if (typeof window === 'undefined') return 'directory';
-    const path = window.location.pathname.toLowerCase();
-    const hash = window.location.hash.toLowerCase();
-    if (path.includes('/administrasi') || hash.includes('/administrasi')) {
-      return 'administrasi';
-    }
-    const productMatch = path.match(/\/produk\/([a-zA-Z0-9_-]+)/) || hash.match(/#\/produk\/([a-zA-Z0-9_-]+)/);
-    if (productMatch && productMatch[1]) {
-      return 'standalone-product';
-    }
-    const pageMatch = path.match(/\/halaman\/([a-zA-Z0-9_-]+)/) || hash.match(/#\/halaman\/([a-zA-Z0-9_-]+)/);
-    if (pageMatch && pageMatch[1]) {
-      return 'custom-page-view';
-    }
-    return 'directory';
-  });
-
+  // Navigation & Routing State
+  const [activeTab, setActiveTab] = useState<string>('directory');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-
-  const [standaloneProduct, setStandaloneProduct] = useState<Product | null>(() => {
-    if (typeof window === 'undefined') return null;
-    const path = window.location.pathname.toLowerCase();
-    const hash = window.location.hash.toLowerCase();
-    const productMatch = path.match(/\/produk\/([a-zA-Z0-9_-]+)/) || hash.match(/#\/produk\/([a-zA-Z0-9_-]+)/);
-    if (productMatch && productMatch[1]) {
-      const prodId = productMatch[1];
-      const prods = StorageService.getProducts();
-      return prods.find((p) => p.id === prodId || p.nomor_izin.toLowerCase() === prodId.toLowerCase()) || null;
-    }
-    return null;
-  });
-
-  const [selectedCustomPage, setSelectedCustomPage] = useState<CustomPage | null>(() => {
-    if (typeof window === 'undefined') return null;
-    const path = window.location.pathname.toLowerCase();
-    const hash = window.location.hash.toLowerCase();
-    const pageMatch = path.match(/\/halaman\/([a-zA-Z0-9_-]+)/) || hash.match(/#\/halaman\/([a-zA-Z0-9_-]+)/);
-    if (pageMatch && pageMatch[1]) {
-      const slug = pageMatch[1];
-      const pages = StorageService.getCustomPages();
-      return pages.find((p) => p.slug === slug || p.id === slug) || null;
-    }
-    return null;
-  });
+  const [standaloneProduct, setStandaloneProduct] = useState<Product | null>(null);
+  const [selectedCustomPage, setSelectedCustomPage] = useState<CustomPage | null>(null);
 
   // Modals State
   const [isScannerOpen, setIsScannerOpen] = useState<boolean>(false);
@@ -121,60 +74,13 @@ export default function App() {
   const [isDeploymentGuideOpen, setIsDeploymentGuideOpen] = useState<boolean>(false);
   const [isAuthOpen, setIsAuthOpen] = useState<boolean>(false);
 
-  const [missingTableAlert, setMissingTableAlert] = useState<{
-    table: string;
-    message: string;
-  } | null>(null);
-  const [copiedSchemaBanner, setCopiedSchemaBanner] = useState(false);
+  // Supabase Sync Status State
+  const [supabaseSyncStatus, setSupabaseSyncStatus] = useState<'connected' | 'syncing' | 'error' | 'idle'>('idle');
+  const [lastSyncedTime, setLastSyncedTime] = useState<string>('');
+  const [supabaseErrorBanner, setSupabaseErrorBanner] = useState<string | null>(null);
 
-  // Initial Data Load & Supabase Cross-browser Sync Listener
-  useEffect(() => {
-    // 1. Cek parameter URL untuk konfigurasi otomatis jika dibuka antar browser
-    if (typeof window !== 'undefined') {
-      try {
-        const searchParams = new URLSearchParams(window.location.search);
-        const urlSupabase = searchParams.get('supabase_url');
-        const keySupabase = searchParams.get('supabase_key') || searchParams.get('supabase_anon_key');
-        if (urlSupabase && keySupabase) {
-          const currentCfg = StorageService.getConfig();
-          currentCfg.supabase_url = urlSupabase;
-          currentCfg.supabase_anon_key = keySupabase;
-          currentCfg.is_connected = true;
-          currentCfg.backend_mode = 'supabase';
-          StorageService.saveConfig(currentCfg);
-        }
-      } catch (e) {
-        // ignore
-      }
-    }
-
-    loadAllData();
-
-    // 2. Jika Supabase aktif, sinkronkan data terbaru secara otomatis dari cloud ke browser ini
-    const sbConfig = SupabaseService.getConfigInfo();
-    if (sbConfig.isConfigured) {
-      SupabaseService.pullFromSupabase()
-        .then((res) => {
-          if (res.success) {
-            loadAllData();
-          }
-        })
-        .catch((e) => console.warn('Auto sync cloud on mount:', e));
-    }
-
-    const unsub = SupabaseService.onTableMissing((info) => {
-      setMissingTableAlert({
-        table: info.table,
-        message: info.message,
-      });
-    });
-
-    return () => {
-      unsub();
-    };
-  }, []);
-
-  const loadAllData = () => {
+  // Initial Data Load & Supabase Integration
+  const loadLocalData = () => {
     setProducts(StorageService.getProducts());
     setCategories(StorageService.getCategories());
     setProducers(StorageService.getProducers());
@@ -186,6 +92,155 @@ export default function App() {
     setSettings(StorageService.getSettings());
     setCustomPages(StorageService.getCustomPages());
   };
+
+  const syncFromSupabase = useCallback(async (silent = false) => {
+    const configInfo = SupabaseService.getConfigInfo();
+    if (!configInfo.isConfigured) {
+      setSupabaseSyncStatus('idle');
+      return;
+    }
+
+    if (!silent) setSupabaseSyncStatus('syncing');
+
+    try {
+      const result = await SupabaseService.fetchAllFromSupabase();
+      if (result.isAvailable) {
+        if (result.products && result.products.length > 0) {
+          setProducts(result.products);
+          StorageService.saveProductsLocalOnly(result.products);
+        } else if (result.products && result.products.length === 0) {
+          // If Supabase table is completely empty on initial setup, seed it
+          await SupabaseService.autoSeedIfEmpty();
+          const refreshed = await SupabaseService.fetchProducts();
+          if (refreshed && refreshed.length > 0) {
+            setProducts(refreshed);
+            StorageService.saveProductsLocalOnly(refreshed);
+          }
+        }
+
+        if (result.categories && result.categories.length > 0) {
+          setCategories(result.categories);
+          StorageService.saveCategoriesLocalOnly(result.categories);
+        }
+        if (result.producers && result.producers.length > 0) {
+          setProducers(result.producers);
+          StorageService.saveProducersLocalOnly(result.producers);
+        }
+        if (result.labResults && result.labResults.length > 0) {
+          setLabResults(result.labResults);
+          StorageService.saveLabResultsLocalOnly(result.labResults);
+        }
+        if (result.recalls && result.recalls.length > 0) {
+          setRecalls(result.recalls);
+          StorageService.saveRecallsLocalOnly(result.recalls);
+        }
+        if (result.reports && result.reports.length > 0) {
+          setReports(result.reports);
+          StorageService.saveReportsLocalOnly(result.reports);
+        }
+        if (result.users && result.users.length > 0) {
+          setUsers(result.users);
+          StorageService.saveUsersLocalOnly(result.users);
+        }
+        if (result.customPages && result.customPages.length > 0) {
+          setCustomPages(result.customPages);
+          StorageService.saveCustomPagesLocalOnly(result.customPages);
+        }
+        if (result.settings) {
+          setSettings(result.settings);
+          StorageService.saveWebsiteSettingsLocalOnly(result.settings);
+        }
+
+        setSupabaseSyncStatus('connected');
+        setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }));
+        setSupabaseErrorBanner(null);
+      } else {
+        const testRes = await SupabaseService.testConnection();
+        if (!testRes.success && (testRes.message.includes('tabel') || testRes.message.includes('SQL'))) {
+          setSupabaseErrorBanner(testRes.message);
+        }
+        setSupabaseSyncStatus('error');
+      }
+    } catch (e: any) {
+      console.warn('Sync from Supabase failed:', e);
+      setSupabaseSyncStatus('error');
+    }
+  }, []);
+
+  useEffect(() => {
+    loadLocalData();
+    syncFromSupabase();
+
+    // Setup Supabase Realtime subscription
+    const unsubscribe = SupabaseService.subscribeToChanges((table) => {
+      console.log(`[Supabase Realtime] Perubahan terdeteksi di tabel: ${table}`);
+      if (table === 'produk') {
+        SupabaseService.fetchProducts().then(prods => {
+          if (prods) {
+            setProducts(prods);
+            StorageService.saveProductsLocalOnly(prods);
+          }
+        });
+      } else if (table === 'kategori') {
+        SupabaseService.fetchCategories().then(cats => {
+          if (cats) {
+            setCategories(cats);
+            StorageService.saveCategoriesLocalOnly(cats);
+          }
+        });
+      } else if (table === 'produsen') {
+        SupabaseService.fetchProducers().then(prods => {
+          if (prods) {
+            setProducers(prods);
+            StorageService.saveProducersLocalOnly(prods);
+          }
+        });
+      } else if (table === 'penarikan_produk') {
+        SupabaseService.fetchRecalls().then(recs => {
+          if (recs) {
+            setRecalls(recs);
+            StorageService.saveRecallsLocalOnly(recs);
+          }
+        });
+      } else if (table === 'pengaduan_masyarakat') {
+        SupabaseService.fetchReports().then(reps => {
+          if (reps) {
+            setReports(reps);
+            StorageService.saveReportsLocalOnly(reps);
+          }
+        });
+      } else if (table === 'halaman_kustom') {
+        SupabaseService.fetchCustomPages().then(pgs => {
+          if (pgs) {
+            setCustomPages(pgs);
+            StorageService.saveCustomPagesLocalOnly(pgs);
+          }
+        });
+      } else if (table === 'pengaturan_website') {
+        SupabaseService.fetchSettings().then(setts => {
+          if (setts) {
+            setSettings(setts);
+            StorageService.saveWebsiteSettingsLocalOnly(setts);
+          }
+        });
+      }
+    });
+
+    const handleFocus = () => {
+      syncFromSupabase(true);
+    };
+    window.addEventListener('focus', handleFocus);
+
+    const interval = setInterval(() => {
+      syncFromSupabase(true);
+    }, 25000);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(interval);
+    };
+  }, [syncFromSupabase]);
 
   // Synchronize browser history and URL routes (e.g. /administrasi, /produk/:id, /halaman/:slug)
   const syncRouteFromUrl = useCallback(() => {
@@ -212,21 +267,6 @@ export default function App() {
         setStandaloneProduct(found);
         setActiveTab('standalone-product');
         return;
-      } else {
-        // Jika belum ada di penyimpanan lokal browser ini (misal dibuka di browser lain atau scan QR baru),
-        // segera tarik data produk langsung dari Supabase
-        SupabaseService.fetchProductById(prodId).then((cloudProd) => {
-          if (cloudProd) {
-            setStandaloneProduct(cloudProd);
-            setActiveTab('standalone-product');
-            const currentList = StorageService.getProducts();
-            if (!currentList.some((p) => p.id === cloudProd.id)) {
-              const updated = [cloudProd, ...currentList];
-              StorageService.saveProductsLocally(updated);
-              setProducts(updated);
-            }
-          }
-        });
       }
     }
 
@@ -288,98 +328,106 @@ export default function App() {
   };
 
   // Handlers for Products
-  const handleAddProduct = (newProduct: Product) => {
+  const handleAddProduct = async (newProduct: Product) => {
     const updated = [newProduct, ...products];
     setProducts(updated);
-    StorageService.saveProducts(updated);
-    SupabaseService.syncProduct(newProduct).catch((err) => {
-      console.warn('Sync to Supabase produk error:', err);
-    });
+    StorageService.addProduct(newProduct);
+    await SupabaseService.upsertProduct(newProduct);
+    setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }));
   };
 
-  const handleUpdateProduct = (updatedProduct: Product) => {
+  const handleUpdateProduct = async (updatedProduct: Product) => {
     const updated = products.map((p) => (p.id === updatedProduct.id ? updatedProduct : p));
     setProducts(updated);
-    StorageService.saveProducts(updated);
-    SupabaseService.syncProduct(updatedProduct).catch((err) => {
-      console.warn('Sync to Supabase produk error:', err);
-    });
+    StorageService.updateProduct(updatedProduct);
     if (selectedProduct?.id === updatedProduct.id) {
       setSelectedProduct(updatedProduct);
     }
     if (standaloneProduct?.id === updatedProduct.id) {
       setStandaloneProduct(updatedProduct);
     }
+    await SupabaseService.upsertProduct(updatedProduct);
+    setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }));
   };
 
-  const handleDeleteProduct = (productId: string) => {
+  const handleDeleteProduct = async (productId: string) => {
     const updated = products.filter((p) => p.id !== productId);
     setProducts(updated);
-    StorageService.saveProducts(updated);
+    StorageService.deleteProduct(productId);
     if (selectedProduct?.id === productId) setSelectedProduct(null);
     if (standaloneProduct?.id === productId) {
       setStandaloneProduct(null);
       setActiveTab('directory');
     }
+    await SupabaseService.deleteProduct(productId);
+    setLastSyncedTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }));
   };
 
   // Category Handler
-  const handleAddCategory = (newCategory: Category) => {
+  const handleAddCategory = async (newCategory: Category) => {
     const updated = [...categories, newCategory];
     setCategories(updated);
-    StorageService.saveCategories(updated);
+    StorageService.addCategory(newCategory);
+    await SupabaseService.upsertCategory(newCategory);
   };
 
-  const handleDeleteCategory = (categoryId: string) => {
+  const handleDeleteCategory = async (categoryId: string) => {
     const updated = categories.filter((c) => c.id !== categoryId);
     setCategories(updated);
-    StorageService.saveCategories(updated);
+    StorageService.deleteCategory(categoryId);
+    await SupabaseService.deleteCategory(categoryId);
   };
 
   // Custom Pages Handlers
-  const handleAddCustomPage = (newPage: CustomPage) => {
+  const handleAddCustomPage = async (newPage: CustomPage) => {
     const updated = [...customPages, newPage];
     setCustomPages(updated);
-    StorageService.saveCustomPages(updated);
+    StorageService.addCustomPage(newPage);
+    await SupabaseService.upsertCustomPage(newPage);
   };
 
-  const handleUpdateCustomPage = (updatedPage: CustomPage) => {
+  const handleUpdateCustomPage = async (updatedPage: CustomPage) => {
     const updated = customPages.map((p) => (p.id === updatedPage.id ? updatedPage : p));
     setCustomPages(updated);
-    StorageService.saveCustomPages(updated);
+    StorageService.updateCustomPage(updatedPage);
     if (selectedCustomPage?.id === updatedPage.id) {
       setSelectedCustomPage(updatedPage);
     }
+    await SupabaseService.upsertCustomPage(updatedPage);
   };
 
-  const handleDeleteCustomPage = (pageId: string) => {
+  const handleDeleteCustomPage = async (pageId: string) => {
     const updated = customPages.filter((p) => p.id !== pageId);
     setCustomPages(updated);
-    StorageService.saveCustomPages(updated);
+    StorageService.deleteCustomPage(pageId);
     if (selectedCustomPage?.id === pageId) {
       setSelectedCustomPage(null);
       setActiveTab('directory');
     }
+    await SupabaseService.deleteCustomPage(pageId);
   };
 
   // Settings Handler
-  const handleSaveSettings = (newSettings: WebsiteSettings) => {
+  const handleSaveSettings = async (newSettings: WebsiteSettings) => {
     setSettings(newSettings);
     StorageService.saveSettings(newSettings);
+    await SupabaseService.saveWebsiteSettings(newSettings);
   };
 
   // Lab Results Handler
-  const handleAddLabResult = (newLab: LabResult) => {
+  const handleAddLabResult = async (newLab: LabResult) => {
     const updated = [newLab, ...labResults];
     setLabResults(updated);
-    StorageService.saveLabResults(updated);
+    StorageService.addLabResult(newLab);
+    await SupabaseService.upsertLabResult(newLab);
   };
 
   // Recalls Handler
-  const handleAddRecall = (newRecall: RecallAlert) => {
+  const handleAddRecall = async (newRecall: RecallAlert) => {
     const updated = [newRecall, ...recalls];
     setRecalls(updated);
-    StorageService.saveRecalls(updated);
+    StorageService.addRecall(newRecall);
+    await SupabaseService.upsertRecall(newRecall);
 
     // If matches product, change status to 'Ditarik'
     const matched = products.find((p) => p.nomor_izin === newRecall.nomor_izin);
@@ -391,72 +439,71 @@ export default function App() {
     }
   };
 
-  // Producer Handlers
-  const handleAddProducer = (newProd: Producer) => {
+  // Producer Handler
+  const handleAddProducer = async (newProd: Producer) => {
     const updated = [...producers, newProd];
     setProducers(updated);
-    StorageService.saveProducers(updated);
-  };
-
-  const handleUpdateProducer = (updatedProd: Producer) => {
-    const updated = producers.map((p) => (p.id === updatedProd.id ? updatedProd : p));
-    setProducers(updated);
-    StorageService.saveProducers(updated);
-  };
-
-  const handleDeleteProducer = (id: string) => {
-    const updated = producers.filter((p) => p.id !== id);
-    setProducers(updated);
-    StorageService.deleteProducer(id);
+    StorageService.addProducer(newProd);
+    await SupabaseService.upsertProducer(newProd);
   };
 
   // Reports Handler
-  const handleAddReport = (newReport: Report) => {
+  const handleAddReport = async (newReport: Report) => {
     const updated = [newReport, ...reports];
     setReports(updated);
-    StorageService.saveReports(updated);
+    StorageService.addReport(newReport);
+    await SupabaseService.upsertReport(newReport);
   };
 
-  const handleUpdateReportStatus = (id: string, status: Report['status'], note?: string) => {
+  const handleUpdateReportStatus = async (id: string, status: Report['status'], note?: string) => {
     const updated = reports.map((r) =>
       r.id === id ? { ...r, status, tanggapan_petugas: note || r.tanggapan_petugas } : r
     );
     setReports(updated);
-    StorageService.saveReports(updated);
+    StorageService.updateReportStatus(id, status, note);
+    const target = updated.find(r => r.id === id);
+    if (target) {
+      await SupabaseService.upsertReport(target);
+    }
   };
 
   // Users Handler
-  const handleAddUser = (newUser: User) => {
+  const handleAddUser = async (newUser: User) => {
     const updated = [...users, newUser];
     setUsers(updated);
-    StorageService.saveUsers(updated);
+    StorageService.addUser(newUser);
+    await SupabaseService.upsertUser(newUser);
   };
 
-  const handleUpdateUser = (updatedUser: User) => {
+  const handleUpdateUser = async (updatedUser: User) => {
     const updated = users.map((u) => (u.id === updatedUser.id ? updatedUser : u));
     setUsers(updated);
-    StorageService.saveUsers(updated);
+    StorageService.updateUser(updatedUser);
     if (currentUser?.id === updatedUser.id) {
       setCurrentUser(updatedUser);
       StorageService.setCurrentUser(updatedUser);
     }
+    await SupabaseService.upsertUser(updatedUser);
   };
 
-  const handleDeleteUser = (userId: string) => {
+  const handleDeleteUser = async (userId: string) => {
     const updated = users.filter((u) => u.id !== userId);
     setUsers(updated);
-    StorageService.saveUsers(updated);
+    StorageService.deleteUser(userId);
+    await SupabaseService.deleteUser(userId);
   };
 
   // Config & Auth Handler
   const handleSaveConfig = (newConfig: AppConfig) => {
     setConfig(newConfig);
     StorageService.saveConfig(newConfig);
+    syncFromSupabase(false);
   };
 
   const handleResetData = () => {
     StorageService.resetToDefault();
-    loadAllData();
+    loadLocalData();
+    syncFromSupabase(false);
   };
 
   const handleLogin = (user: User) => {
@@ -511,6 +558,9 @@ export default function App() {
         recallsCount={recalls.filter((r) => r.status === 'Aktif').length}
         settings={settings}
         customPages={customPages}
+        supabaseSyncStatus={supabaseSyncStatus}
+        lastSyncedTime={lastSyncedTime}
+        onTriggerSync={() => syncFromSupabase(false)}
         onOpenScanner={() => setIsScannerOpen(true)}
         onOpenReport={() => setIsReportOpen(true)}
         onOpenAddProduct={() => setIsAddProductOpen(true)}
@@ -522,43 +572,67 @@ export default function App() {
         onSelectCustomPage={navigateToCustomPage}
       />
 
+      {/* Supabase Schema Notice Banner if tables aren't created yet */}
+      {supabaseErrorBanner && (
+        <div className="bg-amber-600 text-white px-4 py-2 text-xs flex items-center justify-between gap-2 shadow-sm animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="w-4 h-4 shrink-0 text-amber-200" />
+            <span>
+              <strong>Perhatian Supabase:</strong> {supabaseErrorBanner}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setIsDatabaseSyncOpen(true)}
+              className="px-2.5 py-1 bg-white text-slate-900 rounded font-bold hover:bg-amber-50 text-[11px]"
+            >
+              Buka Skrip SQL Supabase
+            </button>
+            <button
+              onClick={() => setSupabaseErrorBanner(null)}
+              className="text-white/80 hover:text-white font-bold px-1"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
         {/* 1. Admin Panel Route (Requirement 1: https://bpom.vercel.app/administrasi) */}
         {activeTab === 'administrasi' && (
-          <ErrorBoundary fallbackTitle="Kendala Memuat Panel Administrasi (/administrasi)">
-            <AdminPanel
-              settings={settings}
-              customPages={customPages}
-              products={products}
-              categories={categories}
-              producers={producers}
-              users={users}
-              currentUser={currentUser}
-              onSaveSettings={handleSaveSettings}
-              onAddProduct={(p) => {
-                handleAddProduct(p);
-                // Open product page with barcode immediately
-                navigateToStandaloneProduct(p);
-              }}
-              onUpdateProduct={handleUpdateProduct}
-              onDeleteProduct={handleDeleteProduct}
-              onAddCategory={handleAddCategory}
-              onDeleteCategory={handleDeleteCategory}
-              onAddCustomPage={handleAddCustomPage}
-              onUpdateCustomPage={handleUpdateCustomPage}
-              onDeleteCustomPage={handleDeleteCustomPage}
-              onAddUser={handleAddUser}
-              onUpdateUser={handleUpdateUser}
-              onDeleteUser={handleDeleteUser}
-              onLoginAsAdmin={handleLogin}
-              onLogout={handleLogout}
-              onNavigateToPublic={() => navigateToTab('directory')}
-              onSelectProduct={navigateToStandaloneProduct}
-              onSelectCustomPage={navigateToCustomPage}
-              onAddProducer={handleAddProducer}
-            />
-          </ErrorBoundary>
+          <AdminPanel
+            settings={settings}
+            customPages={customPages}
+            products={products}
+            categories={categories}
+            producers={producers}
+            users={users}
+            currentUser={currentUser}
+            onSaveSettings={handleSaveSettings}
+            onAddProduct={(p) => {
+              handleAddProduct(p);
+              // Open product page with barcode immediately
+              navigateToStandaloneProduct(p);
+            }}
+            onUpdateProduct={handleUpdateProduct}
+            onDeleteProduct={handleDeleteProduct}
+            onAddCategory={handleAddCategory}
+            onDeleteCategory={handleDeleteCategory}
+            onAddCustomPage={handleAddCustomPage}
+            onUpdateCustomPage={handleUpdateCustomPage}
+            onDeleteCustomPage={handleDeleteCustomPage}
+            onAddUser={handleAddUser}
+            onUpdateUser={handleUpdateUser}
+            onDeleteUser={handleDeleteUser}
+            onLoginAsAdmin={handleLogin}
+            onLogout={handleLogout}
+            onNavigateToPublic={() => navigateToTab('directory')}
+            onSelectProduct={navigateToStandaloneProduct}
+            onSelectCustomPage={navigateToCustomPage}
+            onAddProducer={handleAddProducer}
+          />
         )}
 
         {/* 2. Standalone Dedicated Product Page with Barcode & QR Code (Requirement 2) */}
@@ -593,6 +667,7 @@ export default function App() {
             products={products}
             currentUser={currentUser}
             onSelectProduct={(p: Product) => setSelectedProduct(p)}
+            onOpenAddModal={() => setIsAddProductOpen(true)}
             onOpenScanner={() => setIsScannerOpen(true)}
             onOpenStandalonePage={navigateToStandaloneProduct}
           />
@@ -628,8 +703,6 @@ export default function App() {
             producers={producers}
             currentUser={currentUser}
             onAddProducer={handleAddProducer}
-            onUpdateProducer={handleUpdateProducer}
-            onDeleteProducer={handleDeleteProducer}
           />
         )}
 
@@ -640,38 +713,6 @@ export default function App() {
             producers={producers}
             onOpenProductDetail={navigateToStandaloneProduct}
           />
-        )}
-
-        {/* 10. Fallback View for Unrecognized Route */}
-        {![
-          'administrasi',
-          'standalone-product',
-          'custom-page-view',
-          'directory',
-          'lab',
-          'recalls',
-          'composition',
-          'producers',
-          'certificate',
-        ].includes(activeTab) && (
-          <div className="bg-white rounded-2xl p-8 sm:p-12 border border-slate-200 text-center space-y-4 max-w-lg mx-auto my-8 shadow-xs">
-            <div className="w-12 h-12 mx-auto rounded-2xl bg-sky-50 text-sky-700 flex items-center justify-center">
-              <Sliders className="w-6 h-6" />
-            </div>
-            <h3 className="text-base font-black text-slate-800">Halaman / Rute Tidak Ditemukan</h3>
-            <p className="text-xs text-slate-500 leading-relaxed">
-              Rute aktif saat ini tidak dapat dimuat. Anda dapat kembali ke katalog utama atau membuka panel administrasi website.
-            </p>
-            <div className="flex items-center justify-center pt-2">
-              <button
-                type="button"
-                onClick={() => navigateToTab('directory')}
-                className="w-full sm:w-auto px-5 py-2.5 bg-sky-900 hover:bg-sky-950 text-white rounded-xl text-xs font-bold transition-colors"
-              >
-                Kembali ke Katalog
-              </button>
-            </div>
-          </div>
         )}
       </main>
 
@@ -845,80 +886,6 @@ export default function App() {
         onLogout={handleLogout}
         onRegister={handleAddUser}
       />
-
-      {/* 9. Global Supabase Missing Table Alert Banner */}
-      {missingTableAlert && (
-        <div className="fixed bottom-5 right-5 max-w-md w-full z-50 p-4 bg-slate-900 text-white rounded-2xl shadow-2xl border border-amber-500/40 animate-in slide-in-from-bottom-4 duration-300">
-          <div className="flex items-start gap-3">
-            <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 mt-0.5 border border-amber-500/30">
-              <AlertTriangle className="w-5 h-5" />
-            </div>
-            <div className="flex-1 min-w-0 space-y-1.5">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
-                  Tabel Supabase Belum Ada: <span className="font-mono text-white">'{missingTableAlert.table}'</span>
-                </h4>
-                <button
-                  onClick={() => setMissingTableAlert(null)}
-                  className="text-slate-400 hover:text-white text-xs p-1"
-                >
-                  ✕
-                </button>
-              </div>
-              <p className="text-[11px] text-slate-300 leading-relaxed">
-                Data Anda telah aman tersimpan di aplikasi lokal. Untuk menyimpan ke database Supabase Cloud, silakan eksekusi skrip SQL skema tabel.
-              </p>
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                <button
-                  onClick={async () => {
-                    const res = await SupabaseService.ensureProductTableExists();
-                    if (res.success) {
-                      setMissingTableAlert(null);
-                      loadAllData();
-                      alert('Tabel Supabase berhasil dibuat otomatis!');
-                    } else {
-                      window.open(SupabaseService.getDashboardSqlUrl(), '_blank');
-                    }
-                  }}
-                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[11px] font-bold inline-flex items-center gap-1 shadow-2xs"
-                >
-                  <RefreshCw className="w-3 h-3" />
-                  <span>Buat Tabel Otomatis</span>
-                </button>
-                <a
-                  href={SupabaseService.getDashboardSqlUrl()}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-2.5 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-[11px] font-bold inline-flex items-center gap-1"
-                >
-                  <ExternalLink className="w-3 h-3" /> Buka SQL Editor
-                </a>
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(SUPABASE_SQL_SCHEMA);
-                    setCopiedSchemaBanner(true);
-                    setTimeout(() => setCopiedSchemaBanner(false), 2000);
-                  }}
-                  className="px-2.5 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-[11px] font-bold inline-flex items-center gap-1"
-                >
-                  {copiedSchemaBanner ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                  <span>{copiedSchemaBanner ? 'Tersalin!' : 'Salin SQL'}</span>
-                </button>
-                <button
-                  onClick={() => {
-                    setMissingTableAlert(null);
-                    navigateToTab('administrasi');
-                  }}
-                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[11px] font-medium"
-                >
-                  Buka Panel Admin
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
-
