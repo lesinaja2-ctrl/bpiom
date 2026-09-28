@@ -6,6 +6,8 @@ import {
   FlaskConical,
   Building2,
   Lock,
+  Plus,
+  Users,
   Database,
   Rocket,
   UserCheck,
@@ -14,8 +16,10 @@ import {
   X,
   Sparkles,
   AlertOctagon,
+  Sliders,
   FileText,
   Megaphone,
+  RefreshCw,
 } from 'lucide-react';
 import { User, WebsiteSettings, CustomPage } from '../types';
 
@@ -26,14 +30,17 @@ interface AppNavbarProps {
   recallsCount: number;
   settings: WebsiteSettings;
   customPages: CustomPage[];
+  supabaseSyncStatus?: 'connected' | 'syncing' | 'error' | 'idle';
+  lastSyncedTime?: string;
+  onTriggerSync?: () => void;
   onOpenScanner: () => void;
   onOpenReport: () => void;
-  onOpenAddProduct?: () => void;
-  onOpenUserManager?: () => void;
+  onOpenAddProduct: () => void;
+  onOpenUserManager: () => void;
   onOpenDatabaseSync: () => void;
   onOpenDeploymentGuide: () => void;
   onOpenAuth: () => void;
-  onOpenAdmin?: () => void;
+  onOpenAdmin: () => void;
   onSelectCustomPage: (page: CustomPage) => void;
 }
 
@@ -44,6 +51,9 @@ export const AppNavbar: React.FC<AppNavbarProps> = ({
   recallsCount,
   settings,
   customPages,
+  supabaseSyncStatus = 'connected',
+  lastSyncedTime = '',
+  onTriggerSync,
   onOpenScanner,
   onOpenReport,
   onOpenAddProduct,
@@ -107,7 +117,42 @@ export const AppNavbar: React.FC<AppNavbarProps> = ({
           </span>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2.5 shrink-0">
+          {/* Live Supabase Server Status Badge */}
+          {supabaseSyncStatus === 'syncing' ? (
+            <div className="flex items-center gap-1 bg-emerald-950/80 border border-emerald-500/50 text-emerald-300 px-2 py-0.5 rounded-full text-[10px] font-semibold animate-pulse">
+              <RefreshCw className="w-3 h-3 animate-spin text-emerald-400" />
+              <span>Sinkronisasi Supabase...</span>
+            </div>
+          ) : supabaseSyncStatus === 'error' ? (
+            <button
+              onClick={onOpenDatabaseSync}
+              className="flex items-center gap-1 bg-red-950/80 border border-red-500/50 text-red-300 hover:text-white px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors"
+              title="Koneksi Supabase bermasalah. Klik untuk periksa."
+            >
+              <span className="w-2 h-2 rounded-full bg-red-500 animate-ping inline-block" />
+              <span>Supabase Belum Terhubung</span>
+            </button>
+          ) : (
+            <div className="flex items-center gap-1.5">
+              <span className="hidden md:inline-flex items-center gap-1.5 bg-emerald-950/60 border border-emerald-500/30 text-emerald-300 px-2.5 py-0.5 rounded-full text-[10px] font-medium">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399]" />
+                <span>Server Supabase Aktif</span>
+                {lastSyncedTime && <span className="text-emerald-400/70">({lastSyncedTime})</span>}
+              </span>
+              {onTriggerSync && (
+                <button
+                  onClick={onTriggerSync}
+                  title="Sinkronkan data dengan database Supabase Cloud sekarang"
+                  className="text-emerald-400 hover:text-white p-0.5 rounded transition-colors"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          )}
+
+          <span className="text-slate-600 hidden sm:inline">|</span>
           <button
             onClick={onOpenDeploymentGuide}
             className="text-sky-200 hover:text-white flex items-center gap-1 font-semibold transition-colors hidden sm:flex"
@@ -175,6 +220,26 @@ export const AppNavbar: React.FC<AppNavbarProps> = ({
             <AlertTriangle className="w-3.5 h-3.5 text-amber-300" />
             <span>Lapor Produk Berbahaya</span>
           </button>
+
+          {isStaff && (
+            <button
+              onClick={onOpenAddProduct}
+              className="px-3.5 py-2 bg-sky-800 hover:bg-sky-900 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs active:scale-95"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Tambah Produk</span>
+            </button>
+          )}
+
+          {isAdmin && (
+            <button
+              onClick={onOpenUserManager}
+              className="p-2 text-slate-600 hover:text-purple-700 hover:bg-purple-50 rounded-xl transition-colors"
+              title="Akses Level Admin: Kelola Sheet User"
+            >
+              <Users className="w-5 h-5" />
+            </button>
+          )}
 
           <div className="h-6 w-px bg-slate-200 mx-1" />
 
@@ -340,6 +405,30 @@ export const AppNavbar: React.FC<AppNavbarProps> = ({
             >
               <AlertTriangle className="w-4 h-4" /> Lapor Produk Berbahaya
             </button>
+
+            {isStaff && (
+              <button
+                onClick={() => {
+                  onOpenAddProduct();
+                  setMobileMenuOpen(false);
+                }}
+                className="w-full py-2 px-3 bg-sky-800 text-white rounded-lg font-bold text-xs flex items-center justify-center gap-2"
+              >
+                <Plus className="w-4 h-4" /> Tambah Produk
+              </button>
+            )}
+
+            {isAdmin && (
+              <button
+                onClick={() => {
+                  onOpenUserManager();
+                  setMobileMenuOpen(false);
+                }}
+                className="w-full py-2 px-3 bg-purple-700 text-white rounded-lg font-bold text-xs flex items-center justify-center gap-2"
+              >
+                <Users className="w-4 h-4" /> Akses Admin: Kelola Sheet User
+              </button>
+            )}
 
             <button
               onClick={() => {
