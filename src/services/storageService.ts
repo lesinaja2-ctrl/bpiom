@@ -10,6 +10,7 @@ import {
   DEFAULT_WEBSITE_SETTINGS,
   INITIAL_CUSTOM_PAGES,
 } from '../data/initialData';
+import { SupabaseService } from './supabaseService';
 
 const CONFIG_KEY = 'bpom_app_config_v1';
 const PRODUCTS_KEY = 'bpom_products_v1';
@@ -53,13 +54,14 @@ export class StorageService {
     return this.getWebsiteSettings();
   }
 
+  static saveWebsiteSettingsLocalOnly(settings: WebsiteSettings): void {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  }
+
   static saveWebsiteSettings(settings: WebsiteSettings): void {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
     this.syncToRemoteIfActive('PengaturanWebsite', settings);
-  }
-
-  static saveWebsiteSettingsLocally(settings: WebsiteSettings): void {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    SupabaseService.saveWebsiteSettings(settings).catch(e => console.warn('Supabase settings sync error:', e));
   }
 
   static saveSettings(settings: WebsiteSettings): void {
@@ -80,19 +82,20 @@ export class StorageService {
     return INITIAL_CUSTOM_PAGES;
   }
 
+  static saveCustomPagesLocalOnly(pages: CustomPage[]): void {
+    localStorage.setItem(CUSTOM_PAGES_KEY, JSON.stringify(pages));
+  }
+
   static saveCustomPages(pages: CustomPage[]): void {
     localStorage.setItem(CUSTOM_PAGES_KEY, JSON.stringify(pages));
     this.syncToRemoteIfActive('HalamanKonten', pages);
-  }
-
-  static saveCustomPagesLocally(pages: CustomPage[]): void {
-    localStorage.setItem(CUSTOM_PAGES_KEY, JSON.stringify(pages));
   }
 
   static addCustomPage(page: CustomPage): CustomPage {
     const list = this.getCustomPages();
     const updated = [...list, page];
     this.saveCustomPages(updated);
+    SupabaseService.upsertCustomPage(page).catch(e => console.warn('Supabase addCustomPage error:', e));
     return page;
   }
 
@@ -103,6 +106,7 @@ export class StorageService {
       list[idx] = page;
       this.saveCustomPages(list);
     }
+    SupabaseService.upsertCustomPage(page).catch(e => console.warn('Supabase updateCustomPage error:', e));
     return page;
   }
 
@@ -110,41 +114,42 @@ export class StorageService {
     const list = this.getCustomPages();
     const updated = list.filter(p => p.id !== pageId);
     this.saveCustomPages(updated);
+    SupabaseService.deleteCustomPage(pageId).catch(e => console.warn('Supabase deleteCustomPage error:', e));
   }
 
   // CONFIG
   static getConfig(): AppConfig {
-    const envUrl = ((typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || '').trim();
-    const envKey = ((typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) || '').trim();
-
-    let config: AppConfig = {
-      backend_mode: envUrl && envKey ? 'supabase' : 'local',
-      google_sheets_id: '',
-      google_script_url: '',
-      google_drive_folder_id: '',
-      supabase_url: envUrl,
-      supabase_anon_key: envKey,
-      is_connected: Boolean(envUrl && envKey),
-    };
+    const envUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
+    const envKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
+    const hasEnvSupabase = Boolean(envUrl && envKey);
 
     const saved = localStorage.getItem(CONFIG_KEY);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        config = { ...config, ...parsed };
-        if (envUrl && !config.supabase_url) config.supabase_url = envUrl;
-        if (envKey && !config.supabase_anon_key) config.supabase_anon_key = envKey;
-        if (config.supabase_url && config.supabase_anon_key) {
-          config.is_connected = true;
-          if (config.backend_mode === 'local') {
-            config.backend_mode = 'supabase';
+        if (hasEnvSupabase) {
+          parsed.supabase_url = parsed.supabase_url || envUrl;
+          parsed.supabase_anon_key = parsed.supabase_anon_key || envKey;
+          if (parsed.backend_mode === 'local') {
+            parsed.backend_mode = 'supabase';
+            parsed.is_connected = true;
           }
         }
+        return parsed;
       } catch (e) {
         console.error(e);
       }
     }
-    return config;
+
+    return {
+      backend_mode: hasEnvSupabase ? 'supabase' : 'local',
+      google_sheets_id: '',
+      google_script_url: '',
+      google_drive_folder_id: '',
+      supabase_url: envUrl,
+      supabase_anon_key: envKey,
+      is_connected: hasEnvSupabase,
+    };
   }
 
   static saveConfig(config: AppConfig): void {
@@ -187,13 +192,13 @@ export class StorageService {
     return INITIAL_PRODUCTS;
   }
 
+  static saveProductsLocalOnly(products: Product[]): void {
+    localStorage.setItem(PRODUCTS_KEY, JSON.stringify(products));
+  }
+
   static saveProducts(products: Product[]): void {
     localStorage.setItem(PRODUCTS_KEY, JSON.stringify(products));
     this.syncToRemoteIfActive('Produk', products);
-  }
-
-  static saveProductsLocally(products: Product[]): void {
-    localStorage.setItem(PRODUCTS_KEY, JSON.stringify(products));
   }
 
   static addProduct(product: Product): Product {
@@ -203,6 +208,12 @@ export class StorageService {
     
     // update category count
     this.incrementCategoryCount(product.kategori);
+
+    // Persist to Supabase Server
+    SupabaseService.upsertProduct(product).catch(err => {
+      console.warn('[Supabase] Gagal menyimpan produk ke Supabase server:', err);
+    });
+
     return product;
   }
 
@@ -213,6 +224,12 @@ export class StorageService {
       list[index] = product;
       this.saveProducts(list);
     }
+
+    // Persist to Supabase Server
+    SupabaseService.upsertProduct(product).catch(err => {
+      console.warn('[Supabase] Gagal memperbarui produk di Supabase server:', err);
+    });
+
     return product;
   }
 
@@ -224,9 +241,11 @@ export class StorageService {
     if (target) {
       this.decrementCategoryCount(target.kategori);
     }
-    import('./supabaseService').then(({ SupabaseService }) => {
-      SupabaseService.deleteProduct(productId);
-    }).catch(() => {});
+
+    // Persist delete to Supabase Server
+    SupabaseService.deleteProduct(productId).catch(err => {
+      console.warn('[Supabase] Gagal menghapus produk dari Supabase server:', err);
+    });
   }
 
   // CATEGORIES
@@ -243,20 +262,28 @@ export class StorageService {
     return INITIAL_CATEGORIES;
   }
 
+  static saveCategoriesLocalOnly(categories: Category[]): void {
+    localStorage.setItem(CATEGORIES_KEY, JSON.stringify(categories));
+  }
+
   static saveCategories(categories: Category[]): void {
     localStorage.setItem(CATEGORIES_KEY, JSON.stringify(categories));
     this.syncToRemoteIfActive('Kategori', categories);
-  }
-
-  static saveCategoriesLocally(categories: Category[]): void {
-    localStorage.setItem(CATEGORIES_KEY, JSON.stringify(categories));
   }
 
   static addCategory(category: Category): Category {
     const list = this.getCategories();
     const updated = [...list, category];
     this.saveCategories(updated);
+    SupabaseService.upsertCategory(category).catch(e => console.warn('Supabase addCategory error:', e));
     return category;
+  }
+
+  static deleteCategory(categoryId: string): void {
+    const list = this.getCategories();
+    const updated = list.filter(c => c.id !== categoryId);
+    this.saveCategories(updated);
+    SupabaseService.deleteCategory(categoryId).catch(e => console.warn('Supabase deleteCategory error:', e));
   }
 
   private static incrementCategoryCount(catName: string) {
@@ -265,6 +292,7 @@ export class StorageService {
     if (item) {
       item.total_produk += 1;
       this.saveCategories([...list]);
+      SupabaseService.upsertCategory(item).catch(() => {});
     }
   }
 
@@ -274,6 +302,7 @@ export class StorageService {
     if (item && item.total_produk > 0) {
       item.total_produk -= 1;
       this.saveCategories([...list]);
+      SupabaseService.upsertCategory(item).catch(() => {});
     }
   }
 
@@ -291,41 +320,28 @@ export class StorageService {
     return INITIAL_PRODUCERS;
   }
 
+  static saveProducersLocalOnly(producers: Producer[]): void {
+    localStorage.setItem(PRODUCERS_KEY, JSON.stringify(producers));
+  }
+
   static saveProducers(producers: Producer[]): void {
     localStorage.setItem(PRODUCERS_KEY, JSON.stringify(producers));
     this.syncToRemoteIfActive('Produsen', producers);
-  }
-
-  static saveProducersLocally(producers: Producer[]): void {
-    localStorage.setItem(PRODUCERS_KEY, JSON.stringify(producers));
   }
 
   static addProducer(producer: Producer): Producer {
     const list = this.getProducers();
     const updated = [producer, ...list];
     this.saveProducers(updated);
-    return producer;
-  }
-
-  static updateProducer(producer: Producer): Producer {
-    const list = this.getProducers();
-    const idx = list.findIndex((p) => p.id === producer.id);
-    if (idx !== -1) {
-      list[idx] = producer;
-      this.saveProducers(list);
-    }
+    SupabaseService.upsertProducer(producer).catch(e => console.warn('Supabase addProducer error:', e));
     return producer;
   }
 
   static deleteProducer(producerId: string): void {
     const list = this.getProducers();
-    const filtered = list.filter((p) => p.id !== producerId);
-    this.saveProducers(filtered);
-    import('./supabaseService')
-      .then(({ SupabaseService }) => {
-        SupabaseService.deleteProducer(producerId);
-      })
-      .catch(() => {});
+    const updated = list.filter(p => p.id !== producerId);
+    this.saveProducers(updated);
+    SupabaseService.deleteProducer(producerId).catch(e => console.warn('Supabase deleteProducer error:', e));
   }
 
   // LAB RESULTS
@@ -342,20 +358,28 @@ export class StorageService {
     return INITIAL_LAB_RESULTS;
   }
 
+  static saveLabResultsLocalOnly(results: LabResult[]): void {
+    localStorage.setItem(LAB_RESULTS_KEY, JSON.stringify(results));
+  }
+
   static saveLabResults(results: LabResult[]): void {
     localStorage.setItem(LAB_RESULTS_KEY, JSON.stringify(results));
     this.syncToRemoteIfActive('UjiLaborat', results);
-  }
-
-  static saveLabResultsLocally(results: LabResult[]): void {
-    localStorage.setItem(LAB_RESULTS_KEY, JSON.stringify(results));
   }
 
   static addLabResult(result: LabResult): LabResult {
     const list = this.getLabResults();
     const updated = [result, ...list];
     this.saveLabResults(updated);
+    SupabaseService.upsertLabResult(result).catch(e => console.warn('Supabase addLabResult error:', e));
     return result;
+  }
+
+  static deleteLabResult(labId: string): void {
+    const list = this.getLabResults();
+    const updated = list.filter(l => l.id !== labId);
+    this.saveLabResults(updated);
+    SupabaseService.deleteLabResult(labId).catch(e => console.warn('Supabase deleteLabResult error:', e));
   }
 
   // RECALLS
@@ -372,20 +396,28 @@ export class StorageService {
     return INITIAL_RECALLS;
   }
 
+  static saveRecallsLocalOnly(recalls: RecallAlert[]): void {
+    localStorage.setItem(RECALLS_KEY, JSON.stringify(recalls));
+  }
+
   static saveRecalls(recalls: RecallAlert[]): void {
     localStorage.setItem(RECALLS_KEY, JSON.stringify(recalls));
     this.syncToRemoteIfActive('PenarikanProduk', recalls);
-  }
-
-  static saveRecallsLocally(recalls: RecallAlert[]): void {
-    localStorage.setItem(RECALLS_KEY, JSON.stringify(recalls));
   }
 
   static addRecall(recall: RecallAlert): RecallAlert {
     const list = this.getRecalls();
     const updated = [recall, ...list];
     this.saveRecalls(updated);
+    SupabaseService.upsertRecall(recall).catch(e => console.warn('Supabase addRecall error:', e));
     return recall;
+  }
+
+  static deleteRecall(recallId: string): void {
+    const list = this.getRecalls();
+    const updated = list.filter(r => r.id !== recallId);
+    this.saveRecalls(updated);
+    SupabaseService.deleteRecall(recallId).catch(e => console.warn('Supabase deleteRecall error:', e));
   }
 
   // REPORTS (PENGADUAN MASYARAKAT)
@@ -402,19 +434,20 @@ export class StorageService {
     return INITIAL_REPORTS;
   }
 
+  static saveReportsLocalOnly(reports: Report[]): void {
+    localStorage.setItem(REPORTS_KEY, JSON.stringify(reports));
+  }
+
   static saveReports(reports: Report[]): void {
     localStorage.setItem(REPORTS_KEY, JSON.stringify(reports));
     this.syncToRemoteIfActive('PengaduanMasyarakat', reports);
-  }
-
-  static saveReportsLocally(reports: Report[]): void {
-    localStorage.setItem(REPORTS_KEY, JSON.stringify(reports));
   }
 
   static addReport(report: Report): Report {
     const list = this.getReports();
     const updated = [report, ...list];
     this.saveReports(updated);
+    SupabaseService.upsertReport(report).catch(e => console.warn('Supabase addReport error:', e));
     return report;
   }
 
@@ -425,6 +458,7 @@ export class StorageService {
       item.status = status;
       if (tanggapan) item.tanggapan_petugas = tanggapan;
       this.saveReports([...list]);
+      SupabaseService.upsertReport(item).catch(e => console.warn('Supabase updateReport error:', e));
     }
   }
 
@@ -442,19 +476,20 @@ export class StorageService {
     return INITIAL_USERS;
   }
 
+  static saveUsersLocalOnly(users: User[]): void {
+    localStorage.setItem(USERS_KEY, JSON.stringify(users));
+  }
+
   static saveUsers(users: User[]): void {
     localStorage.setItem(USERS_KEY, JSON.stringify(users));
     this.syncToRemoteIfActive('Users', users);
-  }
-
-  static saveUsersLocally(users: User[]): void {
-    localStorage.setItem(USERS_KEY, JSON.stringify(users));
   }
 
   static addUser(user: User): User {
     const list = this.getUsers();
     const updated = [...list, user];
     this.saveUsers(updated);
+    SupabaseService.upsertUser(user).catch(e => console.warn('Supabase addUser error:', e));
     return user;
   }
 
@@ -464,6 +499,7 @@ export class StorageService {
     if (idx !== -1) {
       list[idx] = user;
       this.saveUsers(list);
+      SupabaseService.upsertUser(user).catch(e => console.warn('Supabase updateUser error:', e));
     }
     return user;
   }
@@ -472,6 +508,7 @@ export class StorageService {
     const list = this.getUsers();
     const updated = list.filter(u => u.id !== userId);
     this.saveUsers(updated);
+    SupabaseService.deleteUser(userId).catch(e => console.warn('Supabase deleteUser error:', e));
   }
 
   // FILE UPLOAD KE GOOGLE DRIVE (Direct GAS or Cloud Simulation with Drive URL)
@@ -522,9 +559,10 @@ export class StorageService {
   // REMOTE SYNC HELPER
   private static async syncToRemoteIfActive(table: string, data: any) {
     const config = this.getConfig();
+    if (!config.is_connected) return;
 
     // Google Sheets GAS Sync
-    if (config.is_connected && config.backend_mode === 'googlesheets' && config.google_script_url) {
+    if (config.backend_mode === 'googlesheets' && config.google_script_url) {
       try {
         fetch(config.google_script_url, {
           method: 'POST',
@@ -534,75 +572,9 @@ export class StorageService {
             table: table,
             dataset: data,
           }),
-        }).catch((err) => console.error('Sync error:', err));
+        }).catch(err => console.error('Sync error:', err));
       } catch (err) {
         console.error(err);
-      }
-    }
-
-    // Supabase Real-time Sync (Active when credentials exist in Env or Storage)
-    const envUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
-    const envKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
-    const isSupabaseConfigured = Boolean(
-      (envUrl && envKey) || (config.supabase_url && config.supabase_anon_key)
-    );
-
-    if (isSupabaseConfigured) {
-      try {
-        const { SupabaseService } = await import('./supabaseService');
-        if (table === 'Produsen') {
-          if (Array.isArray(data)) {
-            data.forEach((p) => SupabaseService.syncProducer(p));
-          } else {
-            SupabaseService.syncProducer(data);
-          }
-        } else if (table === 'Produk') {
-          if (Array.isArray(data)) {
-            data.forEach((p) => SupabaseService.syncProduct(p));
-          } else {
-            SupabaseService.syncProduct(data);
-          }
-        } else if (table === 'Kategori') {
-          if (Array.isArray(data)) {
-            data.forEach((c) => SupabaseService.syncCategory(c));
-          } else {
-            SupabaseService.syncCategory(data);
-          }
-        } else if (table === 'UjiLaborat') {
-          if (Array.isArray(data)) {
-            data.forEach((l) => SupabaseService.syncLabResult(l));
-          } else {
-            SupabaseService.syncLabResult(data);
-          }
-        } else if (table === 'Penarikan') {
-          if (Array.isArray(data)) {
-            data.forEach((r) => SupabaseService.syncRecall(r));
-          } else {
-            SupabaseService.syncRecall(data);
-          }
-        } else if (table === 'Pengaduan') {
-          if (Array.isArray(data)) {
-            data.forEach((rep) => SupabaseService.syncReport(rep));
-          } else {
-            SupabaseService.syncReport(data);
-          }
-        } else if (table === 'Users') {
-          if (Array.isArray(data)) {
-            data.forEach((u) => SupabaseService.syncUser(u));
-          } else {
-            SupabaseService.syncUser(data);
-          }
-        } else if (table === 'HalamanKonten') {
-          if (Array.isArray(data)) {
-            data.forEach((pg) => SupabaseService.syncCustomPage(pg));
-          } else {
-            SupabaseService.syncCustomPage(data);
-          }
-        } else if (table === 'PengaturanWebsite') {
-          SupabaseService.syncWebsiteSettings(data);
-        }
-      } catch (err) {
-        console.warn('[Supabase Real-time Sync Warning]:', err);
       }
     }
   }
