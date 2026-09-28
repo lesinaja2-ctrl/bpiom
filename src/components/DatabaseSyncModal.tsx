@@ -12,6 +12,7 @@ import {
   AlertCircle,
   X,
   ShieldCheck,
+  DownloadCloud,
 } from 'lucide-react';
 import { AppConfig } from '../types';
 import { GOOGLE_APPS_SCRIPT_CODE } from '../services/googleAppsScriptTemplate';
@@ -375,6 +376,29 @@ export const DatabaseSyncModal: React.FC<DatabaseSyncModalProps> = ({
                     className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 transition-colors"
                   >
                     <Cloud className="w-3.5 h-3.5" /> Sinkronkan Data ke Supabase
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setTestingConnection(true);
+                      setTestResult(null);
+                      try {
+                        const res = await SupabaseService.pullFromSupabase();
+                        setTestResult({ success: res.success, msg: res.message });
+                        if (res.success) {
+                          setTimeout(() => window.location.reload(), 1500);
+                        }
+                      } catch (e: any) {
+                        setTestResult({ success: false, msg: e?.message || 'Gagal menarik data' });
+                      } finally {
+                        setTestingConnection(false);
+                      }
+                    }}
+                    disabled={testingConnection}
+                    className="px-3.5 py-2 bg-sky-700 hover:bg-sky-800 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 transition-colors"
+                  >
+                    <DownloadCloud className="w-3.5 h-3.5" /> Tarik Data dari Supabase
                   </button>
                 </div>
 
